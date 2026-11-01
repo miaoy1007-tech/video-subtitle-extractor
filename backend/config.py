@@ -51,7 +51,7 @@ class Config(QConfig):
     # 字幕语言设置
     language = OptionsConfigItem("Main", "Language", "ch", OptionsValidator([name for name in tr["Language"]]))
     # 识别模式设置
-    mode = OptionsConfigItem("Main", "Mode", "fast",  OptionsValidator(["auto", "fast", "accurate"]))
+    mode = OptionsConfigItem("Main", "Mode", "fast",  OptionsValidator(["auto", "fast", "accurate", "apple"]))
     # 是否生成TXT文本字幕
     generateTxt = ConfigItem("Main", "GenerateTxt", False, BoolValidator())
     # 每张图中同时识别6个文本框中的文本，GPU显存越大，该数值可以设置越大
@@ -90,6 +90,8 @@ class Config(QConfig):
     hardwareAcceleration = ConfigItem("Main", "HardwareAcceleration", HARDWARD_ACCELERATION_OPTION, BoolValidator())
     # 启动时检查应用更新
     checkUpdateOnStartup = ConfigItem("Main", "CheckUpdateOnStartup", True, BoolValidator())
+    # 修复视频起始帧已有字幕时可能漏检的问题
+    recoverFirstSubtitle = ConfigItem("Main", "RecoverFirstSubtitle", True, BoolValidator())
     # 视频保存目录
     saveDirectory = ConfigItem("Main", "SaveDirectory", "", ConfigValidator())
     # VideoSubFinder CPU核心数

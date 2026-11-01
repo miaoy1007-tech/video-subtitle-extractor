@@ -28,6 +28,7 @@ from backend.tools.process_manager import ProcessManager
 from ui.advanced_setting_interface import AdvancedSettingInterface
 from ui.home_interface import HomeInterface
 from ui.timeline_sync_interface import TimelineSyncInterface
+from ui.caption_bridge_interface import CaptionBridgeInterface
 
 
 class SubtitleExtractorGUI(FluentWindow): 
@@ -77,6 +78,10 @@ class SubtitleExtractorGUI(FluentWindow):
         # 创建主页面和高级设置页面
         self.homeInterface = HomeInterface(self)
         self.homeInterface.setObjectName("HomeInterface")
+        self.captionBridgeInterface = CaptionBridgeInterface(self)
+        self.captionBridgeInterface.setObjectName("CaptionBridgeInterface")
+        self.homeInterface.auto_synthesize.toggled.connect(self.captionBridgeInterface.auto_synthesize.setChecked)
+        self.captionBridgeInterface.auto_synthesize.toggled.connect(self.homeInterface.auto_synthesize.setChecked)
         self.timelineSyncInterface = TimelineSyncInterface(self)
         self.timelineSyncInterface.setObjectName("TimelineSyncInterface")
         self.advancedSettingInterface = AdvancedSettingInterface(self)
@@ -84,6 +89,7 @@ class SubtitleExtractorGUI(FluentWindow):
         
         # 添加到主窗口作为子界面
         self.addSubInterface(self.homeInterface,FluentIcon.HOME, tr['SubtitleExtractorGUI']['Title'])
+        self.addSubInterface(self.captionBridgeInterface, FluentIcon.VIDEO, "翻译与视频合成")
         self.addSubInterface(self.timelineSyncInterface,FluentIcon.FONT, tr['TimelineSync']['Title'])
         self.addSubInterface(self.advancedSettingInterface, FluentIcon.SETTING, tr['Setting']['AdvancedSetting'], NavigationItemPosition.BOTTOM)
 
@@ -171,15 +177,18 @@ class SubtitleExtractorGUI(FluentWindow):
 
 
 if __name__ == '__main__':
+    initial_video = sys.argv[2] if len(sys.argv) == 3 and sys.argv[1] == '--video' else None
     multiprocessing.set_start_method("spawn")
     QApplication.setHighDpiScaleFactorRoundingPolicy(
     Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
-    app = QtWidgets.QApplication(sys.argv)
+    app = QtWidgets.QApplication([sys.argv[0]])
     app.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)
     window = SubtitleExtractorGUI()
     # 先设置透明, 再显示, 否则会有闪烁的效果
     window.setWindowOpacity(0.0)
     window.show()
+    if initial_video:
+        QTimer.singleShot(0, lambda: window.homeInterface.import_video(initial_video))
     window.load_window_position()
     # 使用动画效果逐渐显示窗口
     animation = QtCore.QPropertyAnimation(window, b"windowOpacity")

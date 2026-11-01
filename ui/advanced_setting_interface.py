@@ -56,6 +56,7 @@ class AdvancedSettingInterface(ScrollArea):
         self.advanced_group.addSettingCard(self.drop_score)
         self.advanced_group.addSettingCard(self.subtitle_area_deviation_rate)
         self.advanced_group.addSettingCard(self.save_directory)
+        self.advanced_group.addSettingCard(self.recover_first_subtitle)
         self.advanced_group.addSettingCard(self.check_update_on_startup)
         self.expandLayout.addWidget(self.advanced_group)
 
@@ -87,6 +88,13 @@ class AdvancedSettingInterface(ScrollArea):
         # 关于设置组  
         self.about_group = SettingCardGroup(tr["Setting"]["AboutSetting"], self.scrollWidget)
         
+        self.recover_first_subtitle = SwitchSettingCard(
+            configItem=config.recoverFirstSubtitle,
+            icon=FluentIcon.SEARCH,
+            title="补检视频开头字幕",
+            content="额外检查开头约 2 秒；可能增加处理时间，补回的文字仍需核对。",
+            parent=self.advanced_group
+        )
         # 每张图中同时识别的文本框数量
         self.rec_batch_number = RangeSettingCard(
             configItem=config.recBatchNumber,

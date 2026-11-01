@@ -4,8 +4,10 @@ import threading
 import multiprocessing
 import time
 import traceback
+import json
+from pathlib import Path
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout
-from PySide6.QtCore import Slot, QRect, Signal
+from PySide6.QtCore import Slot, QRect, Signal, QProcess, QSettings
 from PySide6.QtGui import QTextCharFormat, QColor
 from PySide6 import QtWidgets
 from qfluentwidgets import (PushButton, CardWidget, PlainTextEdit, FluentIcon)
@@ -21,6 +23,7 @@ class HomeInterface(QWidget):
     progress_signal = Signal(int, int, int, bool, int) 
     append_log_signal = Signal(list)
     task_error_signal = Signal(object)
+    ocr_ready = Signal(str, str)
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         self.setObjectName("HomeInterface")
@@ -46,6 +49,7 @@ class HomeInterface(QWidget):
         self.progress_signal.connect(self.update_progress)
         self.append_log_signal.connect(self.append_log)
         self.task_error_signal.connect(self.on_task_error)
+        self.ocr_ready.connect(self.continue_to_translation)
         print(tr['Main']['AcceleratorWarning'])
 
     def __init_widgets(self):
@@ -110,18 +114,41 @@ class HomeInterface(QWidget):
         # 操作按钮容器
         button_container = CardWidget(self)
         button_layout = QHBoxLayout()
-        button_layout.setContentsMargins(16, 16, 16, 16)
+        button_layout.setContentsMargins(0, 0, 0, 0)
         button_layout.setSpacing(8)
         
         self.file_button = PushButton(tr['SubtitleExtractorGUI']['Open'], self)
         self.file_button.setIcon(FluentIcon.FOLDER)
         self.file_button.clicked.connect(self.open_file)
         button_layout.addWidget(self.file_button)
+
+        self.download_button = PushButton("下载视频", self)
+        self.download_button.setIcon(FluentIcon.DOWNLOAD)
+        self.download_button.clicked.connect(self.download_video)
+        button_layout.addWidget(self.download_button)
+        self.download_process = QProcess(self)
+        self.download_process.setProcessChannelMode(QProcess.MergedChannels)
+        self.download_process.readyReadStandardOutput.connect(self.read_download_output)
+        self.download_process.finished.connect(self.download_finished)
+        self.download_output = ""
+        self.download_pending = ""
+        self.last_download_progress = -10
         
         self.run_button = PushButton(tr['SubtitleExtractorGUI']['Run'], self)
         self.run_button.setIcon(FluentIcon.PLAY)
         self.run_button.clicked.connect(self.run_button_clicked)
         button_layout.addWidget(self.run_button)
+
+        self.caption_button = PushButton("翻译与合成", self)
+        self.caption_button.clicked.connect(self.open_caption_bridge)
+        button_layout.addWidget(self.caption_button)
+        self.workflow_settings = QSettings('miaoyu', 'SubtitleExtractorWorkflow')
+        self.auto_translate = QtWidgets.QCheckBox('提取后自动翻译', self)
+        self.auto_translate.setChecked(self.workflow_settings.value('auto_translate', True, type=bool))
+        self.auto_translate.toggled.connect(lambda value: self.workflow_settings.setValue('auto_translate', value))
+        self.auto_synthesize = QtWidgets.QCheckBox('翻译后自动合成', self)
+        self.auto_synthesize.setChecked(self.workflow_settings.value('auto_synthesize', False, type=bool))
+        self.auto_synthesize.toggled.connect(lambda value: self.workflow_settings.setValue('auto_synthesize', value))
         
         self.stop_button = PushButton(tr['SubtitleExtractorGUI']['Stop'], self)
         self.stop_button.setIcon(MyFluentIcon.Stop)
@@ -130,11 +157,93 @@ class HomeInterface(QWidget):
         
         button_layout.addWidget(self.stop_button)
         
-        button_container.setLayout(button_layout)
+        options_layout = QHBoxLayout()
+        options_layout.addWidget(self.auto_translate)
+        options_layout.addWidget(self.auto_synthesize)
+        options_layout.addStretch()
+        container_layout = QVBoxLayout(button_container)
+        container_layout.setContentsMargins(16, 16, 16, 16)
+        container_layout.addLayout(button_layout)
+        container_layout.addLayout(options_layout)
         right_layout.addWidget(button_container)
 
         main_layout.addLayout(right_layout, 1)
     
+    def download_video(self):
+        url, ok = QtWidgets.QInputDialog.getText(self, "下载视频", "请输入视频链接：")
+        if not ok or not url.strip():
+            return
+        root = Path('/Users/miaoyu/Developer/VideoCaptioner')
+        python = root / '.venv/bin/python'
+        script = root / 'scripts/extractor-download.py'
+        if not python.is_file() or not script.is_file():
+            self.append_output("找不到 VideoCaptioner 下载组件，请检查安装。")
+            return
+        self.download_output = ""
+        self.download_pending = ""
+        self.last_download_progress = -10
+        self.download_button.setEnabled(False)
+        self.append_output("开始下载视频…")
+        self.download_process.start(str(python), [str(script), url.strip()])
+        if not self.download_process.waitForStarted(3000):
+            self.download_button.setEnabled(True)
+            self.append_output("无法启动下载组件。")
+
+    def read_download_output(self):
+        data = bytes(self.download_process.readAllStandardOutput()).decode('utf-8', errors='replace')
+        self.download_output += data
+        lines = (self.download_pending + data).split('\n')
+        self.download_pending = lines.pop()
+        for line in lines:
+            if line.startswith('VIDEO_RESULT=') or not line.strip():
+                continue
+            prefix, separator, _ = line.partition('%')
+            if separator and prefix.isdigit():
+                progress = int(prefix)
+                if progress < 90 and progress < self.last_download_progress + 10:
+                    continue
+                self.last_download_progress = progress
+            self.append_output(line)
+
+    def download_finished(self, code, status):
+        self.read_download_output()
+        self.download_button.setEnabled(True)
+        result = next((line[len('VIDEO_RESULT='):] for line in self.download_output.splitlines()
+                       if line.startswith('VIDEO_RESULT=')), None)
+        if code != 0 or not result:
+            self.append_output(self.download_output.strip() or "下载失败，请检查链接和设置。")
+            return
+        try:
+            path = json.loads(result)
+            if not isinstance(path, str) or not self.import_video(path):
+                raise ValueError("视频已下载，但无法载入字幕提取器。")
+            self.append_output("下载完成，请框选字幕区域后开始提取。")
+        except (ValueError, TypeError) as exc:
+            self.append_output(str(exc))
+
+    def open_caption_bridge(self):
+        index = self.task_list_component.get_current_task_index()
+        task = self.task_list_component.get_task(index) if index >= 0 else None
+        if not task:
+            self.append_output("请先选择一个视频。")
+            return
+        window = self.window()
+        page = window.captionBridgeInterface
+        page.video.setText(task.path)
+        if task.status == TaskStatus.COMPLETED and os.path.isfile(task.output_path):
+            page.subtitle.setText(task.output_path)
+        else:
+            page.subtitle.clear()
+        window.switchTo(page)
+
+    def continue_to_translation(self, video, subtitle):
+        page = self.window().captionBridgeInterface
+        page.video.setText(video)
+        page.subtitle.setText(subtitle)
+        page.mode.setCurrentIndex(0)
+        self.window().switchTo(page)
+        page.start()
+
     def on_scroll_change(self, value):
         """监控滚动条位置变化"""
         scrollbar = self.output_text.verticalScrollBar()
@@ -315,6 +424,7 @@ class HomeInterface(QWidget):
             pending_tasks = self.task_list_component.get_pending_tasks()
             if not pending_tasks:
                 return
+            auto_continue = self.auto_translate.isChecked() and len(self.task_list_component.get_all_tasks()) == 1
             
             self.run_button.setVisible(False)
             self.stop_button.setVisible(True)
@@ -371,6 +481,8 @@ class HomeInterface(QWidget):
                                 # 任务完成, 更新输出路径为只读
                                 task.output_path = output_path
                                 self.task_list_component.update_task_status(self.current_processing_task_index, TaskStatus.COMPLETED)
+                                if auto_continue and os.path.isfile(task.output_path):
+                                    self.ocr_ready.emit(task.path, task.output_path)
                             else:
                                 self.task_list_component.update_task_status(self.current_processing_task_index, TaskStatus.FAILED)
                             
@@ -411,6 +523,14 @@ class HomeInterface(QWidget):
         """
         sr = None
         try:
+            if config.mode.value == 'apple':
+                from backend.tools.apple_vision import extract
+                extract(video_path, output_path, options.get('sub_area'), config.language.value,
+                        config.generateTxt.value,
+                        lambda *args: SubtitleExtractorRemoteCall.remote_call_append_log(queue, args),
+                        lambda pid: SubtitleExtractorRemoteCall.remote_call_manage_process(queue, pid))
+                SubtitleExtractorRemoteCall.remote_call_update_progress(queue, 100, 100, 100, False, 100)
+                return
             from backend.main import SubtitleExtractor
             sr = SubtitleExtractor(video_path)
             sr.subtitle_output_path = output_path
@@ -420,9 +540,27 @@ class HomeInterface(QWidget):
             sr.append_output = lambda *args: SubtitleExtractorRemoteCall.remote_call_append_log(queue, args)
             sr.manage_process = lambda pid: SubtitleExtractorRemoteCall.remote_call_manage_process(queue, pid)
             sr.run()
+            if (config.recoverFirstSubtitle.value and sr.sub_area is not None
+                    and (sr.sub_area.ab_section is None or 0 in sr.sub_area.ab_section)):
+                from backend.tools.first_subtitle_recovery import recover_first_subtitle
+                def run_probe(probe_video, probe_srt):
+                    probe = SubtitleExtractor(probe_video)
+                    probe.sub_area = sr.sub_area
+                    probe.subtitle_output_path = probe_srt
+                    probe.append_output = sr.append_output
+                    probe.manage_process = sr.manage_process
+                    probe.run()
+                try:
+                    sr.append_output("正在额外检查视频开头字幕…")
+                    recovered = recover_first_subtitle(video_path, output_path, run_probe, sr.append_output)
+                    if recovered and config.generateTxt.value:
+                        sr.srt2txt(output_path)
+                except Exception as exc:
+                    sr.append_output(f"首句补检失败，已保留原字幕：{exc}")
         except Exception as e:
             traceback.print_exc()
             SubtitleExtractorRemoteCall.remote_call_catch_error(queue, e)
+            raise
         finally:
             if sr:
                 sr.isFinished = True
@@ -604,6 +742,18 @@ class HomeInterface(QWidget):
             index = max(0, self.task_list_component.find_task_index_by_path(path))
             self.task_list_component.select_task(index)
 
+    def import_video(self, path):
+        if not os.path.isfile(path) or not self.load_video(path):
+            self.append_output("无法载入视频：" + path)
+            return False
+        index = self.task_list_component.find_task_index_by_path(path)
+        if index < 0:
+            self.task_list_component.add_task(path)
+            index = self.task_list_component.find_task_index_by_path(path)
+        self.task_list_component.select_task(index)
+        self.append_output("视频已载入，请框选字幕区域后开始提取。")
+        return True
+
     def closeEvent(self, event):
         """窗口关闭时断开信号连接"""
         try:
@@ -624,4 +774,3 @@ class HomeInterface(QWidget):
         except Exception as e:
             print(f"Error during close window:", e)
         super().closeEvent(event)
-    

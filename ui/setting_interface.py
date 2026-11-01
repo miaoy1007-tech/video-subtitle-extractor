@@ -42,7 +42,7 @@ class SettingInterface(QtWidgets.QVBoxLayout):
             title=tr["LanguageModeGUI"]["Mode"],
             content="",
             parent=parent,
-            texts=[tr['Mode'][i] for i in config.mode.validator.options],
+            texts=[('Apple Vision（本机）' if i == 'apple' else tr['Mode'][i]) for i in config.mode.validator.options],
         )
         self.addWidget(self.mode_combo)
            
