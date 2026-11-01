@@ -24,10 +24,12 @@ class HomeInterface(QWidget):
     append_log_signal = Signal(list)
     task_error_signal = Signal(object)
     ocr_ready = Signal(str, str)
+    caption_result_ready = Signal(str, str)
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         self.setObjectName("HomeInterface")
         # 初始化一些变量
+        self.caption_handoff = None
         self.video_path = None
         self.video_cap = None
         self.fps = None
@@ -50,6 +52,7 @@ class HomeInterface(QWidget):
         self.append_log_signal.connect(self.append_log)
         self.task_error_signal.connect(self.on_task_error)
         self.ocr_ready.connect(self.continue_to_translation)
+        self.caption_result_ready.connect(self.send_caption_result)
         print(tr['Main']['AcceleratorWarning'])
 
     def __init_widgets(self):
@@ -169,6 +172,30 @@ class HomeInterface(QWidget):
 
         main_layout.addLayout(right_layout, 1)
     
+    def configure_caption_handoff(self, video, result_path):
+        self.caption_handoff = (str(Path(video).resolve()), Path(result_path).resolve())
+        # The VideoCaptioner request controls continuation; never launch another copy.
+        self.auto_translate.blockSignals(True)
+        self.auto_translate.setChecked(False)
+        self.auto_translate.blockSignals(False)
+        self.auto_translate.setEnabled(False)
+        self.auto_synthesize.setEnabled(False)
+        self.append_output("此任务来自 VideoCaptioner，提取完成后自动返回。")
+
+    def send_caption_result(self, video, subtitle):
+        if not self.caption_handoff or str(Path(video).resolve()) != self.caption_handoff[0]:
+            return
+        result = self.caption_handoff[1]
+        try:
+            payload = {"video": str(Path(video).resolve()), "subtitle": str(Path(subtitle).resolve())}
+            temporary = result.with_suffix('.tmp')
+            temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+            os.replace(temporary, result)
+            self.append_output("字幕已返回 VideoCaptioner。")
+            self.caption_handoff = None
+        except OSError as exc:
+            self.append_output("无法返回字幕，请保留结果文件并手动导入：" + str(exc))
+
     def download_video(self):
         url, ok = QtWidgets.QInputDialog.getText(self, "下载视频", "请输入视频链接：")
         if not ok or not url.strip():
@@ -472,6 +499,8 @@ class HomeInterface(QWidget):
                             # 清理缓存, 使用动态路径
                             task.output_path = None
                             output_path = task.output_path
+                            if self.caption_handoff and str(Path(task.path).resolve()) == self.caption_handoff[0]:
+                                output_path = str(self.caption_handoff[1].parent / 'source.original.srt')
                             process = self.run_subtitle_extractor_process(task.path, output_path, options)
                             
                             # 更新任务状态为已完成
@@ -481,8 +510,11 @@ class HomeInterface(QWidget):
                                 # 任务完成, 更新输出路径为只读
                                 task.output_path = output_path
                                 self.task_list_component.update_task_status(self.current_processing_task_index, TaskStatus.COMPLETED)
-                                if auto_continue and os.path.isfile(task.output_path):
-                                    self.ocr_ready.emit(task.path, task.output_path)
+                                if os.path.isfile(task.output_path):
+                                    if self.caption_handoff and str(Path(task.path).resolve()) == self.caption_handoff[0]:
+                                        self.caption_result_ready.emit(task.path, task.output_path)
+                                    elif auto_continue:
+                                        self.ocr_ready.emit(task.path, task.output_path)
                             else:
                                 self.task_list_component.update_task_status(self.current_processing_task_index, TaskStatus.FAILED)
                             

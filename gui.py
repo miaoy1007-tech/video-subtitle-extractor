@@ -177,7 +177,12 @@ class SubtitleExtractorGUI(FluentWindow):
 
 
 if __name__ == '__main__':
-    initial_video = sys.argv[2] if len(sys.argv) == 3 and sys.argv[1] == '--video' else None
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--video')
+    parser.add_argument('--caption-result')
+    args = parser.parse_args()
+    initial_video = args.video
     multiprocessing.set_start_method("spawn")
     QApplication.setHighDpiScaleFactorRoundingPolicy(
     Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
@@ -188,6 +193,8 @@ if __name__ == '__main__':
     window.setWindowOpacity(0.0)
     window.show()
     if initial_video:
+        if args.caption_result:
+            window.homeInterface.configure_caption_handoff(initial_video, args.caption_result)
         QTimer.singleShot(0, lambda: window.homeInterface.import_video(initial_video))
     window.load_window_position()
     # 使用动画效果逐渐显示窗口

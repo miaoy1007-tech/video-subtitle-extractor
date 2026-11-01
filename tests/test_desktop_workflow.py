@@ -1,5 +1,6 @@
 """Offline checks for the desktop handoff; no downloads or paid API calls."""
 import os
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,6 +45,30 @@ class DesktopWorkflowTest(unittest.TestCase):
                 page.start()
                 self.assertEqual(start.call_args.args[1][-1], '--auto-synthesize')
             page.close()
+
+    def test_caption_handoff_returns_only_matching_video_without_changing_preferences(self):
+        with tempfile.TemporaryDirectory() as d:
+            video = Path(d) / 'video.mp4'
+            subtitle = Path(d) / 'source.original.srt'
+            response = Path(d) / 'ocr-result.json'
+            video.touch()
+            subtitle.write_text('original', encoding='utf-8')
+            page = HomeInterface()
+            try:
+                page.workflow_settings.setValue("auto_translate", True)
+                page.auto_translate.setChecked(True)
+                page.configure_caption_handoff(str(video), str(response))
+                self.assertTrue(page.workflow_settings.value('auto_translate', type=bool))
+                self.assertFalse(page.auto_translate.isEnabled())
+                page.send_caption_result('/wrong/video.mp4', str(subtitle))
+                self.assertFalse(response.exists())
+                page.send_caption_result(str(video), str(subtitle))
+                self.assertEqual(json.loads(response.read_text()), {
+                    'video': str(video.resolve()), 'subtitle': str(subtitle.resolve())
+                })
+                self.assertIsNone(page.caption_handoff)
+            finally:
+                page.close()
 
     def test_download_completion_imports_the_exact_result(self):
         with tempfile.TemporaryDirectory() as d:
